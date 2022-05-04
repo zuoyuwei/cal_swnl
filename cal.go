@@ -3,15 +3,18 @@ package main
 import (
 	"errors"
 	"fmt"
+
 	// "github.com/cdipaolo/goml/base"
 	// "github.com/cdipaolo/goml/linear"
-	"gonum.org/v1/gonum/stat"
 	"sort"
 
+	"gonum.org/v1/gonum/stat"
+
 	//"github.com/grd/statistics"
-	uuid "github.com/satori/go.uuid"
 	"time"
-	// "hello/neural"
+
+	uuid "github.com/satori/go.uuid"
+
 	"github.com/NOX73/go-neural"
 	"github.com/NOX73/go-neural/learn"
 	"github.com/NOX73/go-neural/persist"
@@ -91,6 +94,7 @@ func CalPendingBioIndexIdList(hitoricalBioSurveys []HitoricalBioSurvey) (pending
 
 // 2.搭建模型
 func CreateBioageModel(userHitoricalBioSurveys []UserHitoricalBioSurvey, bioIndex_i []BioIndex) (err error) {
+// func CreateBioageModel(userHitoricalBioSurveys []UserHitoricalBioSurvey, bioIndex_i []BioIndex) (intercept float64, bioIndex_o []BioIndex, err error) {
 	// 更新指标权重
 	values := [][]float64{}
 	//value := []float64{}
@@ -117,7 +121,7 @@ func CreateBioageModel(userHitoricalBioSurveys []UserHitoricalBioSurvey, bioInde
 			values = append(values, value)
 		}
 	}
-	
+
 	// 划分X自变量，Y因变量值
 	threeDLineX := [][]float64{}
 	threeDLineY := []float64{}
@@ -130,16 +134,18 @@ func CreateBioageModel(userHitoricalBioSurveys []UserHitoricalBioSurvey, bioInde
 		threeDLineX = append(threeDLineX, row)
 		threeDLineY = append(threeDLineY, values[i][col-1])
 	}
-	
+
 	// 线性回归模型
-	// model_ := linear.NewLeastSquares(base.StochasticGA, 1e-4, 13.06, 1e3, threeDLineX, threeDLineY)
+	// model_ := linear.NewLeastSquares(base.StochasticGA, 1e-4, 13.06, 1e1, threeDLineX, threeDLineY)
 	// err = model_.Learn()
 	// if err != nil {
 	// 	panic("This is wrong!")
 	// }
-	// intercept = model_.Parameters[0]
+	// inter = model_.Parameters[0]
+	// fmt.Println("model_.Parameters:", len(model_.Parameters))
+	// fmt.Println("bio_index:", len(bioIndex_i))
 	// if len(model_.Parameters)-1 != len(bioIndex_i) {
-	// 	return 0, []BioIndex{}, errors.New("index num is not correct")
+	// 	return 0, []BioIndex{}, errors.New("index num is not correct") 
 	// }
 	// for i, _ := range bioIndex_i {
 	// 	bioIndex_i[i].Weight = model_.Parameters[i+1]
@@ -153,11 +159,12 @@ func CreateBioageModel(userHitoricalBioSurveys []UserHitoricalBioSurvey, bioInde
 		err = errors.New("input mismatch output when create model")
 	}
 	fmt.Println(threeDLineX)
+	fmt.Println(threeDLineY)
 	// epoch=1000
-	speed := 0.1
-	n := neural.NewNetwork(1, []int{1,2,1})
+	speed := 0.01
+	n := neural.NewNetwork(2, []int{2, 4, 1})
 	n.RandomizeSynapses()
-	for i:=0;i<1000;i++ {
+	for i := 0; i < 100; i++ {
 		for j, _ := range threeDLineX {
 			output := []float64{}
 			input := threeDLineX[j]
@@ -171,11 +178,25 @@ func CreateBioageModel(userHitoricalBioSurveys []UserHitoricalBioSurvey, bioInde
 
 //3.调用模型
 func model(bioSurveyResults []BioSurveyResult) (bioage float64, err error) {
+	fmt.Println(bioSurveyResults)
+	fmt.Println(bio_index)
 	bioage += inter
 	for i, _ := range bioSurveyResults[:len(bioSurveyResults)-1] {
 		bioage += bioSurveyResults[i].CalculateValue * bio_index[i].Weight
 	}
 	return bioage, err
+
+	// 神经网络计算
+	// v := []float64{}
+	// for i, _ := range bioSurveyResults {
+	// 	v = append(v, bioSurveyResults[i].CalculateValue)
+	// }
+	// n := persist.FromFile("./model.json")
+	// fmt.Println(n)
+	// fmt.Println(v)
+	// fmt.Println(n.Calculate(v))
+	// bioage = n.Calculate(v)[0]
+	// return bioage, err
 }
 
 func main() {
@@ -185,17 +206,20 @@ func main() {
 	//创建不同指标值（2个指标，3次测量）
 	bio_survey_res1 := BioSurveyResult{IndexId: index_id1, IndexType: "xing", CalculateValue: 100}
 	bio_survey_res2 := BioSurveyResult{IndexId: index_id2, IndexType: "liang", CalculateValue: 4}
-	bio_survey_res3 := BioSurveyResult{IndexId: index_id1, IndexType: "xing", CalculateValue: 90}
-	bio_survey_res4 := BioSurveyResult{IndexId: index_id2, IndexType: "liang", CalculateValue: 3}
-	bio_survey_res5 := BioSurveyResult{IndexId: index_id1, IndexType: "xing", CalculateValue: 80}
-	bio_survey_res6 := BioSurveyResult{IndexId: index_id2, IndexType: "liang", CalculateValue: 2}
+	bio_survey_res3 := BioSurveyResult{IndexId: index_id2, IndexType: "liang", CalculateValue: 16}
+	bio_survey_res4 := BioSurveyResult{IndexId: index_id1, IndexType: "xing", CalculateValue: 80}
+	bio_survey_res5 := BioSurveyResult{IndexId: index_id2, IndexType: "liang", CalculateValue: 3}
+	bio_survey_res6 := BioSurveyResult{IndexId: index_id2, IndexType: "liang", CalculateValue: 17}
+	bio_survey_res7 := BioSurveyResult{IndexId: index_id1, IndexType: "xing", CalculateValue: 80}
+	bio_survey_res8 := BioSurveyResult{IndexId: index_id2, IndexType: "liang", CalculateValue: 2}
+	bio_survey_res9 := BioSurveyResult{IndexId: index_id2, IndexType: "liang", CalculateValue: 18} // 生物年龄当作指标最后一个属性，在最后一列，用于构建模型
 	// bio_survey_res3 := BioSurveyResult{IndexId: index_id2, IndexType: "liang", CalculateValue: 18} // 生物年龄当作指标最后一个属性，在最后一列，用于构建模型
 	// he_bio_survey_res_1 := []BioSurveyResult{bio_survey_res1, bio_survey_res2}
 	// he_bio_survey_res_2 := []BioSurveyResult{bio_survey_res3, bio_survey_res4}
 	// he_bio_survey_res := []BioSurveyResult{bio_survey_res1, bio_survey_res2, bio_survey_res3}
-	historical_bio_survey1 := HitoricalBioSurvey{BioSurveyDate: time.Date(2022, 4, 24, 13, 45, 0, 0, time.UTC), BioSurveyResults: []BioSurveyResult{bio_survey_res1, bio_survey_res2}}
-	historical_bio_survey2 := HitoricalBioSurvey{BioSurveyDate: time.Date(2022, 4, 24, 14, 21, 0, 0, time.UTC), BioSurveyResults: []BioSurveyResult{bio_survey_res3, bio_survey_res4}}
-	historical_bio_survey3 := HitoricalBioSurvey{BioSurveyDate: time.Date(2022, 4, 24, 15, 23, 0, 0, time.UTC), BioSurveyResults: []BioSurveyResult{bio_survey_res5, bio_survey_res6}}
+	historical_bio_survey1 := HitoricalBioSurvey{BioSurveyDate: time.Date(2022, 4, 24, 13, 45, 0, 0, time.UTC), BioSurveyResults: []BioSurveyResult{bio_survey_res1, bio_survey_res2, bio_survey_res3}}
+	historical_bio_survey2 := HitoricalBioSurvey{BioSurveyDate: time.Date(2022, 4, 24, 14, 21, 0, 0, time.UTC), BioSurveyResults: []BioSurveyResult{bio_survey_res4, bio_survey_res5, bio_survey_res6}}
+	historical_bio_survey3 := HitoricalBioSurvey{BioSurveyDate: time.Date(2022, 4, 24, 15, 23, 0, 0, time.UTC), BioSurveyResults: []BioSurveyResult{bio_survey_res7, bio_survey_res8, bio_survey_res9}}
 	historical_bio_survey := []HitoricalBioSurvey{historical_bio_survey1, historical_bio_survey2, historical_bio_survey3}
 	index_id, err := CalPendingBioIndexIdList(historical_bio_survey)
 	fmt.Println(index_id)
@@ -209,10 +233,13 @@ func main() {
 	user_historical_bio_survey2 := []HitoricalBioSurvey{historical_bio_survey1, historical_bio_survey2, historical_bio_survey3}
 	user_historical_bio_survey := []UserHitoricalBioSurvey{{UserID: user_id1, HitoricalBioSurveys: user_historical_bio_survey1},
 		{UserID: user_id2, HitoricalBioSurveys: user_historical_bio_survey2}}
-	// bio_index = []BioIndex{{IndexId: index_id1, Minimum: 0, Maxmum: 100, Weight: 0}, {IndexId: index_id2, Minimum: 0, Maxmum: 100, Weight: 0}}
-	err = CreateBioageModel(user_historical_bio_survey, bio_index)
+	bio_index = []BioIndex{{IndexId: index_id1, Minimum: 0, Maxmum: 100, Weight: 0}, {IndexId: index_id2, Minimum: 0, Maxmum: 100, Weight: 0}}
+	inter, bio_index, err = CreateBioageModel(user_historical_bio_survey, bio_index)
 	fmt.Println("构建模型结束----------------------")
 
-	// bioage, _ := model(he_bio_survey_res)
-	// fmt.Println(bioage)
+	test_bio_survey_res := []BioSurveyResult{{IndexId: uuid.NewV4(), IndexType: "liang", CalculateValue: 100},
+		{IndexId: uuid.NewV4(), IndexType: "xing", CalculateValue: 4}}
+	bioage, _ := model(test_bio_survey_res)
+	fmt.Println(bioage)
+	fmt.Println("调用模型结束----------------------")
 }
