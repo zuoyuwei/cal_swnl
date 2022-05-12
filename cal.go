@@ -49,21 +49,13 @@ type BioIndex struct {
 	Weight  float64   // 权重
 }
 
-//func is_chong(indexIDList []uuid.UUID, index uuid.UUID) bool {
-//	for _, i := range indexIDList {
-//		if index == i {
-//			return true
-//		}
-//	}
-//	return false
-//}
-
 func is_need(array []float64) bool {
 	// array: 单一指标的所有历史值
 	// return: True or False(历史值是否具有波动性)
 	// max-min标准化0~1
 	// 指标至少测量5次
-	if len(array) < 2 {
+	if len(array) < 3 {
+		fmt.Println("测量次数不足5次\t")
 		return true
 	}
 	sort.Float64s(array)
@@ -78,6 +70,7 @@ func is_need(array []float64) bool {
 	if stddev < 0.5 {
 		return false
 	}
+	fmt.Println("该id变异较大\t")
 	return true
 }
 
@@ -85,10 +78,11 @@ func is_need(array []float64) bool {
 // 1.1 如果存在新增指标还没有记录时，需要判断
 // 1.2 测量次数至少为5次
 // 1.3 指标未测量达2个月需重新测量
+// 1.4 如果全指标的个数减少，输出的适应指标相应减少
 func CalPendingBioIndexIdList(hitoricalBioSurveys []HitoricalBioSurvey, bioindex []BioIndex) (pendingBioIndexIdList []uuid.UUID, err error) {
 	//func CalPendingBioIndexIdList(currentDate time.Time, hitoricalBioSurveys []HitoricalBioSurvey, bioindex []BioIndex) (pendingBioIndexIdList map[uuid.UUID]int, err error) {
-	id_value := make(map[uuid.UUID][]float64)
-	id_date := make(map[uuid.UUID]time.Time) //是否要区分测量的时间间隔
+	id_value := make(map[uuid.UUID][]float64) //key:指标ID;value:历次指标值
+	id_date := make(map[uuid.UUID]time.Time)  //记录每个指标的最新测量时间
 	bio_num := len(hitoricalBioSurveys)
 	for i := 0; i < bio_num; i++ {
 		//fmt.Println(i.BioSurveyDate)
@@ -109,7 +103,7 @@ func CalPendingBioIndexIdList(hitoricalBioSurveys []HitoricalBioSurvey, bioindex
 			pendingBioIndexIdList = append(pendingBioIndexIdList, i)
 		} else {
 			if is_need(id_value[i]) {
-				fmt.Println("该id变异较大，添加该id", i)
+				fmt.Println("遂添加该id", i)
 				pendingBioIndexIdList = append(pendingBioIndexIdList, i)
 			} else {
 				fmt.Println("This id dont need mearure!", i)
@@ -118,7 +112,7 @@ func CalPendingBioIndexIdList(hitoricalBioSurveys []HitoricalBioSurvey, bioindex
 	}
 
 	// ADD: 1.1 如果存在新增指标还没有记录时，需要判断
-	//fmt.Println(id_value)
+	fmt.Println(id_value)
 	for _, bi := range bioindex {
 		_, ok := id_value[bi.IndexId]
 		if ok {
@@ -126,6 +120,21 @@ func CalPendingBioIndexIdList(hitoricalBioSurveys []HitoricalBioSurvey, bioindex
 		} else {
 			//fmt.Println("This index not exists！")
 			pendingBioIndexIdList = append(pendingBioIndexIdList, bi.IndexId)
+		}
+	}
+
+	// 1.4 如果全指标的个数减少，输出的适应指标相应减少
+	for i := 0; i < len(pendingBioIndexIdList); i++ {
+		flags := false
+		for j, _ := range bioindex {
+			if pendingBioIndexIdList[i] == bioindex[j].IndexId {
+				flags = true
+				break
+			}
+		}
+		if !flags {
+			pendingBioIndexIdList = append(pendingBioIndexIdList[:i], pendingBioIndexIdList[i+1:]...)
+			i -= 1
 		}
 	}
 
@@ -142,71 +151,95 @@ func CalPendingBioIndexIdList(hitoricalBioSurveys []HitoricalBioSurvey, bioindex
 	return pendingBioIndexIdList, err
 }
 
-func is_xiangdeng(a []uuid.UUID, b []uuid.UUID) bool {
-	// 判断两数组是否相等，包括长度、顺序和值
-	if len(a) != len(b) {
-		return false
-	}
-	for i, _ := range a {
-		if a[i] != b[i] {
-			return false
+func is_contain(a []uuid.UUID, b []uuid.UUID) bool {
+	// 判断a数组是否包含b数组
+	//if len(a) != len(b) {
+	//	return false
+	//}
+	//for i, _ := range a {
+	//	if a[i] != b[i] {
+	//		return false
+	//	}
+	//}
+	//return true
+	sum := 0
+	for i, _ := range b {
+		for j, _ := range a {
+			if b[i] == a[j] {
+				sum += 1
+				break
+			}
 		}
 	}
-	return true
+	if sum == len(b) {
+		return true
+	}
+	return false
 }
 
 // 2.搭建模型
 // 2.1 添加全指标，以补全未测量指标部分的值
 // 2.2 模型保存为文件
+// 2.3 最新的全指标还未测量，返回error，告知用户需先进行测量
 func CreateBioageModel(userHitoricalBioSurveys []UserHitoricalBioSurvey, bioIndex []BioIndex) (n_out *deep.Neural, err error) {
+	//用户记录安装日期顺序升序
 	//func CreateBioageModel(userHitoricalBioSurveys []UserHitoricalBioSurvey, bioIndex_i []BioIndex) (err error) {
 	//func CreateBioageModel(userHitoricalBioSurveys []UserHitoricalBioSurvey, bioIndex_i []BioIndex) (intercept float64, bioIndex_o []BioIndex, err error) {
+	if len(userHitoricalBioSurveys) == 0 {
+		return n_out, errors.New("所传用户记录为空，无法构建模型")
+	}
+	if len(bioIndex) == 0 {
+		return n_out, errors.New("所传全指标信息为空，无法构建模型")
+	}
 	//	ADD: 2.1 添加全指标，以补全未测量指标部分的值
 	values := [][]float64{}
-	//var most_index int	// 记录中指标最多测到多少
-	//ids := []uuid.UUID{}
-	bioIndexs := []uuid.UUID{}
+	to_indids := []uuid.UUID{}
 	for _, b := range bioIndex {
-		bioIndexs = append(bioIndexs, b.IndexId)
+		to_indids = append(to_indids, b.IndexId)
 	}
 	for _, i := range userHitoricalBioSurveys {
-		index_num := make(map[uuid.UUID]int)    // 每个用户开始采用记录构建模型的起始位置
-		id_value := make(map[uuid.UUID]float64) // 保存每个用户指标的起始位置的历史值
+		var index_num int = -1 // 每个用户开始采用记录构建模型的起始位置
+		//index_num := make(map[uuid.UUID]int)    // 每个用户开始采用记录构建模型的起始位置
+		//id_value := make(map[uuid.UUID]float64) // 保存每个用户指标的起始位置的历史值
 		for pos, j := range i.HitoricalBioSurveys {
 			//value := []float64{}
-			indexids := []uuid.UUID{}
+			cur_indids := []uuid.UUID{}
 			for _, k := range j.BioSurveyResults {
-				indexids = append(indexids, k.IndexId)
+				cur_indids = append(cur_indids, k.IndexId)
 			}
-			if is_xiangdeng(indexids, bioIndexs) {
-				index_num[i.UserID] = pos
-				for _, k := range j.BioSurveyResults {
-					id_value[k.IndexId] = k.CalculateValue
-					//value = append(value, k.CalculateValue)
-				}
+			//fmt.Println(cur_indids, to_indids)
+			if is_contain(cur_indids, to_indids) {
+				index_num = pos
+				//index_num[i.UserID] = pos
+				//for _, k := range j.BioSurveyResults {
+				//	id_value[k.IndexId] = k.CalculateValue
+				//value = append(value, k.CalculateValue)
+				//}
 				break
 			} else {
 				continue
 			}
 			//values = append(values, value)
 		}
-		_, ok := index_num[i.UserID]
-		if !ok {
+		//_, ok := index_num[i.UserID]
+		if index_num == -1 {
 			continue
 		}
-		for _, j := range i.HitoricalBioSurveys[index_num[i.UserID]:] {
-			ids1 := make(map[uuid.UUID]float64)
+		for _, j := range i.HitoricalBioSurveys[index_num:] {
+			//for _, j := range i.HitoricalBioSurveys[index_num[i.UserID]:] {
+			id_value1 := make(map[uuid.UUID]float64)
 			value := []float64{}
 			for _, k := range j.BioSurveyResults {
-				ids1[k.IndexId] = k.CalculateValue
+				id_value1[k.IndexId] = k.CalculateValue //指标对应值更新为最新日期的
 			}
+			//fmt.Println(id_value1)
 			for _, m := range bioIndex {
-				_, ok := ids1[m.IndexId]
-				if ok {
-					value = append(value, ids1[m.IndexId])
-				} else {
-					value = append(value, id_value[m.IndexId])
-				}
+				//_, ok := id_value1[m.IndexId]
+				//if ok {
+				value = append(value, id_value1[m.IndexId])
+				//} else {
+				//	value = append(value, id_value[m.IndexId])
+				//}
 			}
 			values = append(values, value)
 		}
@@ -270,6 +303,13 @@ func CreateBioageModel(userHitoricalBioSurveys []UserHitoricalBioSurvey, bioInde
 	//	}
 	//}
 	fmt.Println(values)
+	//ADD: 2.3 最新的全指标还未测量，返回error，告知用户需先进行测量
+	if len(values) == 0 {
+		return n_out, errors.New("ERROR: 请先根据最新指标列表进行记录的测量")
+	}
+	if len(values[0]) < 2 {
+		return n_out, errors.New("ERROR: 输入数据维度为1，无法划分自变量和因变量")
+	}
 
 	// 划分X自变量，Y因变量值,默认Y排在指标最后
 	threeDLineX := [][]float64{}
@@ -324,7 +364,7 @@ func CreateBioageModel(userHitoricalBioSurveys []UserHitoricalBioSurvey, bioInde
 
 	// 全链接神经网络go-deep
 	if len(threeDLineX) != len(threeDLineY) {
-		err = errors.New("input mismatch output when create model")
+		return n_out, errors.New("input mismatch output when create model")
 	}
 	data := training.Examples{}
 	for i, _ := range threeDLineX {
@@ -332,7 +372,7 @@ func CreateBioageModel(userHitoricalBioSurveys []UserHitoricalBioSurvey, bioInde
 	}
 	n := deep.NewNeural(&deep.Config{
 		/* Input dimensionality */
-		Inputs: 2,
+		Inputs: len(values[0]) - 1,
 		/* Two hidden layers consisting of two neurons each, and a single output */
 		Layout: []int{2, 2, 1},
 		/* Activation functions: Sigmoid, Tanh, ReLU, Linear */
@@ -355,9 +395,9 @@ func CreateBioageModel(userHitoricalBioSurveys []UserHitoricalBioSurvey, bioInde
 	// start training
 	training, heldout := data.Split(1)
 	trainer.Train(n, training, heldout, 100) // training, validation, iterations
-	fmt.Printf("n:%T\n", n)
-	fmt.Println("n", n)
-	fmt.Println(n.Predict([]float64{100, 4}))
+	//fmt.Printf("n:%T\n", n)
+	//fmt.Println("n", n)
+	//fmt.Println(n.Predict([]float64{100, 4}))
 	//persist.ToFile("./model.json", n)
 
 	// ADD: 2.2 模型保存为文件
@@ -370,7 +410,8 @@ func CreateBioageModel(userHitoricalBioSurveys []UserHitoricalBioSurvey, bioInde
 //3.调用模型
 //3.1更改传入参数以补全最新记录的缺失值，参照构建模型时的预处理
 //3.2读取本地模型文件
-func model(n *deep.Neural, hitBioSurveyResults []HitoricalBioSurvey, bioIndex []BioIndex) (bioage float64, err error) {
+//3.3 最新的全指标还未测量，返回error，告知用户需先进行测量
+func model(hitBioSurveyResults []HitoricalBioSurvey, bioIndex []BioIndex) (bioage float64, err error) {
 	//func model(n *deep.Neural, bioSurveyResults []BioSurveyResult) (bioage float64, err error) {
 	//fmt.Println(bioSurveyResults)
 	//fmt.Println(bio_index)
@@ -391,43 +432,65 @@ func model(n *deep.Neural, hitBioSurveyResults []HitoricalBioSurvey, bioIndex []
 	//fmt.Println(n.Calculate(v))
 	//bioage = n.Calculate(v)[0]
 
+	if len(hitBioSurveyResults) == 0 {
+		return 0, errors.New("所传历史记录为空，无法调用模型")
+	}
+	if len(bioIndex) == 0 {
+		return 0, errors.New("所传全指标信息为空，无法调用模型")
+	}
+
 	//神经网络计算go-deep
 	//ADD: 3.1更改传入参数以补全最新记录的缺失值，参照构建模型时的预处理
 	num_bio := len(hitBioSurveyResults)
 	id_value := make(map[uuid.UUID]float64) //保存各指标的历史值
-	bioIndexs := []uuid.UUID{}
+	to_indids := []uuid.UUID{}
+	var index_num int = -1
 	for _, b := range bioIndex {
-		bioIndexs = append(bioIndexs, b.IndexId)
+		to_indids = append(to_indids, b.IndexId)
 	}
-	for _, j := range hitBioSurveyResults {
+	for pos, j := range hitBioSurveyResults {
 		//value := []float64{}
-		indexids := []uuid.UUID{}
+		cur_indids := []uuid.UUID{}
 		for _, k := range j.BioSurveyResults {
-			indexids = append(indexids, k.IndexId)
+			cur_indids = append(cur_indids, k.IndexId)
 		}
-		if is_xiangdeng(indexids, bioIndexs) {
-			for _, k := range j.BioSurveyResults {
-				id_value[k.IndexId] = k.CalculateValue
-				//value = append(value, k.CalculateValue)
-			}
+		if is_contain(cur_indids, to_indids) {
+			index_num = pos
+			//for _, k := range j.BioSurveyResults {
+			//	id_value[k.IndexId] = k.CalculateValue
+			//value = append(value, k.CalculateValue)
+			//}
 			break
 		} else {
 			continue
 		}
 		//values = append(values, value)
 	}
-	ids1 := make(map[uuid.UUID]float64)
+	if index_num == -1 {
+		return 0, errors.New("当前全指标记录还未测量，请测量并构建模型后再调用")
+	}
+	for _, i := range hitBioSurveyResults[index_num:] {
+		for _, j := range i.BioSurveyResults {
+			id_value[j.IndexId] = j.CalculateValue
+		}
+	}
+	//ADD: 3.3 最新的全指标还未测量，返回error，告知用户需先进行测量
+	//if len(id_value) == 0 {
+	//	return bioage, errors.New("ERROR: 请先根据最新指标列表进行记录的测量")
+	//}
+	//ids1 := make(map[uuid.UUID]float64)
 	v := []float64{}
 	latest_bio := hitBioSurveyResults[num_bio-1].BioSurveyResults
 	for _, k := range latest_bio {
-		ids1[k.IndexId] = k.CalculateValue
+		id_value[k.IndexId] = k.CalculateValue
 	}
 	for _, m := range bioIndex {
-		_, ok := ids1[m.IndexId]
+		_, ok := id_value[m.IndexId]
 		if ok {
-			v = append(v, ids1[m.IndexId])
-		} else {
 			v = append(v, id_value[m.IndexId])
+		} else {
+			//v = append(v, id_value[m.IndexId])
+			return 0, errors.New("ERROR: 请先根据最新指标列表进行记录的测量")
 		}
 	}
 	//for _, i := range latest_bio {
@@ -439,19 +502,14 @@ func model(n *deep.Neural, hitBioSurveyResults []HitoricalBioSurvey, bioIndex []
 	//}
 	//ADD：3.2读取本地模型文件
 	undump, _ := os.ReadFile("./model.json")
-	//fmt.Printf("undump:%T\n", undump)
 	var new_dump deep.Dump
-	//fmt.Printf("new_dump:%T\n", new_dump)
 	err = json.Unmarshal(undump, &new_dump)
-	//if err != nil {
-	//}
-	//fmt.Printf("new_dump:%T\n", new_dump)
 	new_n := deep.FromDump(&new_dump)
-	fmt.Printf("new_n:%T\n", new_n)
-	fmt.Println("new_n:", new_n)
-	fmt.Println(v)
-	fmt.Println(new_n.Forward(v[:len(v)-1]))
-	fmt.Println(new_n.Predict(v))
+	//fmt.Println(new_n.Config.Inputs)
+	if len(v) != new_n.Config.Inputs {
+		return 0, errors.New("最新测量指标与模型输入维度不符，请检查后再调用模型")
+	}
+	new_n.Forward(v[:len(v)-1])
 	bioage = new_n.Predict(v)[0]
 	return bioage, err
 }
@@ -469,14 +527,14 @@ func main() {
 	bio_survey_res2 := BioSurveyResult{IndexId: index_id2, IndexType: "liang", CalculateValue: 4}
 	bio_survey_res3 := BioSurveyResult{IndexId: index_id3, IndexType: "liang", CalculateValue: 16} // 生物年龄当作指标最后一个属性，在最后一列，用于构建模型
 	bio_survey_res4 := BioSurveyResult{IndexId: index_id1, IndexType: "xing", CalculateValue: 80}
-	bio_survey_res5 := BioSurveyResult{IndexId: index_id2, IndexType: "liang", CalculateValue: 3}
+	bio_survey_res5 := BioSurveyResult{IndexId: index_id2, IndexType: "liang", CalculateValue: 4}
 	bio_survey_res6 := BioSurveyResult{IndexId: index_id3, IndexType: "liang", CalculateValue: 17}
 	bio_survey_res7 := BioSurveyResult{IndexId: index_id1, IndexType: "xing", CalculateValue: 80}
-	//bio_survey_res8 := BioSurveyResult{IndexId: index_id2, IndexType: "liang", CalculateValue: 2}
+	bio_survey_res8 := BioSurveyResult{IndexId: index_id2, IndexType: "liang", CalculateValue: 4}
 	bio_survey_res9 := BioSurveyResult{IndexId: index_id3, IndexType: "liang", CalculateValue: 18}
 	historical_bio_survey1 := HitoricalBioSurvey{BioSurveyDate: time.Date(2022, 2, 24, 13, 45, 0, 0, time.UTC), BioSurveyResults: []BioSurveyResult{bio_survey_res1, bio_survey_res2, bio_survey_res3}}
 	historical_bio_survey2 := HitoricalBioSurvey{BioSurveyDate: time.Date(2022, 3, 24, 14, 21, 0, 0, time.UTC), BioSurveyResults: []BioSurveyResult{bio_survey_res4, bio_survey_res5, bio_survey_res6}}
-	historical_bio_survey3 := HitoricalBioSurvey{BioSurveyDate: time.Date(2022, 4, 24, 15, 23, 0, 0, time.UTC), BioSurveyResults: []BioSurveyResult{bio_survey_res7, bio_survey_res9}}
+	historical_bio_survey3 := HitoricalBioSurvey{BioSurveyDate: time.Date(2022, 4, 24, 15, 23, 0, 0, time.UTC), BioSurveyResults: []BioSurveyResult{bio_survey_res7, bio_survey_res8, bio_survey_res9}}
 	historical_bio_survey := []HitoricalBioSurvey{historical_bio_survey1, historical_bio_survey2, historical_bio_survey3}
 	bio_index = []BioIndex{{IndexId: index_id1, Minimum: 0, Maxmum: 100, Weight: 0}, {IndexId: index_id2, Minimum: 0, Maxmum: 100, Weight: 0}, {IndexId: index_id3, Minimum: 0, Maxmum: 100, Weight: 0}}
 	index_id, err := CalPendingBioIndexIdList(historical_bio_survey, bio_index)
@@ -494,10 +552,21 @@ func main() {
 	//inter, bio_index, err = CreateBioageModel(user_historical_bio_survey, bio_index)
 	//err = CreateBioageModel(user_historical_bio_survey, bio_index)
 	network, err = CreateBioageModel(user_historical_bio_survey, bio_index)
+	if err != nil {
+		fmt.Println(err)
+	}
 	fmt.Println("构建模型结束----------------------")
 
 	//bioage, _ := model(test_bio_survey_res)
-	bioage, _ := model(network, user_historical_bio_survey1, bio_index)
+	new_bio_index := []BioIndex{{IndexId: index_id1, Minimum: 0, Maxmum: 100, Weight: 0}, {IndexId: index_id2, Minimum: 0, Maxmum: 100, Weight: 0}}
+	new_historical_bio_survey1 := HitoricalBioSurvey{BioSurveyDate: time.Date(2022, 2, 24, 13, 45, 0, 0, time.UTC), BioSurveyResults: []BioSurveyResult{bio_survey_res1, bio_survey_res2}}
+	new_historical_bio_survey2 := HitoricalBioSurvey{BioSurveyDate: time.Date(2022, 3, 24, 14, 21, 0, 0, time.UTC), BioSurveyResults: []BioSurveyResult{bio_survey_res4, bio_survey_res5}}
+	new_historical_bio_survey3 := HitoricalBioSurvey{BioSurveyDate: time.Date(2022, 4, 24, 15, 23, 0, 0, time.UTC), BioSurveyResults: []BioSurveyResult{bio_survey_res7, bio_survey_res8}}
+	new_user_historical_bio_survey := []HitoricalBioSurvey{new_historical_bio_survey1, new_historical_bio_survey2, new_historical_bio_survey3}
+	bioage, err := model(new_user_historical_bio_survey, new_bio_index)
+	if err != nil {
+		fmt.Println(err)
+	}
 	fmt.Println(bioage)
 	fmt.Println("调用模型结束----------------------")
 }
